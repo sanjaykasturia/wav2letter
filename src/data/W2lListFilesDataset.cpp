@@ -23,7 +23,8 @@ W2lListFilesDataset::W2lListFilesDataset(
     int worldRank /* = 0 */,
     int worldSize /* = 1 */,
     bool fallback2Ltr /* = false */,
-    bool skipUnk /* = false */)
+    bool skipUnk /* = false */,
+    const std::string& rootdir /* = "" */)
     : W2lDataset(dicts, batchSize, worldRank, worldSize),
       lexicon_(lexicon),
       fallback2Ltr_(fallback2Ltr),
@@ -36,7 +37,8 @@ W2lListFilesDataset::W2lListFilesDataset(
   auto filesVec = split(',', filenames);
   std::vector<SpeechSampleMetaInfo> speechSamplesMetaInfo;
   for (const auto& f : filesVec) {
-    auto fileSampleInfo = loadListFile(f);
+    auto fullpath = pathsConcat(rootdir, trim(f));
+    auto fileSampleInfo = loadListFile(fullpath);
     speechSamplesMetaInfo.insert(
         speechSamplesMetaInfo.end(),
         fileSampleInfo.begin(),
@@ -76,7 +78,7 @@ std::vector<W2lLoaderData> W2lListFilesDataset::getLoaderData(
     }
 
     data[id].sampleId = data_[i].getSampleId();
-    data[id].input = speech::loadSound<float>(data_[i].getAudioFile().c_str());
+    data[id].input = loadSound(data_[i].getAudioFile());
     data[id].targets[kTargetIdx] = wrd2Target(
         data_[i].getTranscript(),
         lexicon_,
@@ -89,6 +91,11 @@ std::vector<W2lLoaderData> W2lListFilesDataset::getLoaderData(
     }
   }
   return data;
+}
+
+std::vector<float> W2lListFilesDataset::loadSound(
+    const std::string& audioHandle) const {
+  return speech::loadSound<float>(audioHandle.c_str());
 }
 
 std::vector<SpeechSampleMetaInfo> W2lListFilesDataset::loadListFile(
@@ -107,9 +114,6 @@ std::vector<SpeechSampleMetaInfo> W2lListFilesDataset::loadListFile(
     auto tokens = splitOnWhitespace(line, true);
 
     LOG_IF(FATAL, tokens.size() < 3) << "Cannot parse " << line;
-
-    // check if audio file exists
-    LOG_IF(FATAL, !fileExists(tokens[1])) << "No file found - " << tokens[1];
 
     data_.emplace_back(SpeechSample(
         tokens[0],

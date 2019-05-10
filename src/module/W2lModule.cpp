@@ -6,15 +6,14 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include "W2lModule.h"
-#include "module/Residual.h"
-#include "module/TDSBlock.h"
-
 #include <string>
 
 #include <glog/logging.h>
 
+#include "W2lModule.h"
+
 #include "common/Utils.h"
+#include "module/TDSBlock.h"
 
 #ifdef BUILD_FB_DEPENDENCIES
 #include "experimental/frontend/Frontend.h"
@@ -277,27 +276,59 @@ std::shared_ptr<Module> parseLines(
 
   /* ========== Residual block ========== */
   if (params[0] == "RES") {
-    LOG_IF(FATAL, params.size() <= 2) << "Failed parsing - " << line;
+    LOG_IF(FATAL, params.size() <= 3) << "Failed parsing - " << line;
 
     auto residualBlock = [&](const std::vector<std::string>& prms,
-                             int& numResLayers) {
-      numResLayers = std::stoi(prms[1]);
-      std::shared_ptr<w2l::Residual> resPtr =
-          std::make_shared<w2l::Residual>(numResLayers);
-      for (int i = 2; i + 1 < prms.size(); i += 2) {
-        resPtr->addShortcut(std::stoi(prms[i]), std::stoi(prms[i + 1]));
-      }
+                             int& numResLayerAndSkip) {
+      int numResLayers = std::stoi(prms[1]);
+      int numSkipConnections = std::stoi(prms[2]);
+      std::shared_ptr<Residual> resPtr = std::make_shared<Residual>();
 
-      for (int i = 1; i <= numResLayers; ++i) {
-        LOG_IF(FATAL, lineIdx + i >= lines.size())
+      int numProjections = 0;
+
+      for (int i = 1; i <= numResLayers + numSkipConnections; ++i) {
+        LOG_IF(FATAL, lineIdx + i + numProjections >= lines.size())
             << "Failed parsing Residual block";
-        resPtr->add(parseLine(lines[lineIdx + i]));
+        std::string resLine = lines[lineIdx + i + numProjections];
+        auto resLinePrms = w2l::splitOnWhitespace(resLine, true);
+
+        if (resLinePrms[0] == "SKIP") {
+          LOG_IF(FATAL, !inRange(3, resLinePrms.size(), 4))
+              << "Failed parsing - " << resLine;
+          resPtr->addShortcut(
+              std::stoi(resLinePrms[1]), std::stoi(resLinePrms[2]));
+          if (resLinePrms.size() == 4) {
+            resPtr->addScale(
+                std::stoi(resLinePrms[2]), std::stof(resLinePrms[3]));
+          }
+        } else if (resLinePrms[0] == "SKIPL") {
+          LOG_IF(FATAL, !inRange(4, resLinePrms.size(), 5))
+              << "Failed parsing - " << resLine;
+          int numProjectionLayers = std::stoi(resLinePrms[3]);
+          auto projection = std::make_shared<Sequential>();
+
+          for (int j = 1; j <= numProjectionLayers; ++j) {
+            LOG_IF(FATAL, lineIdx + i + numProjections + j >= lines.size())
+                << "Failed parsing Projection block";
+            projection->add(parseLine(lines[lineIdx + i + numProjections + j]));
+          }
+          resPtr->addShortcut(
+              std::stoi(resLinePrms[1]), std::stoi(resLinePrms[2]), projection);
+          if (resLinePrms.size() == 5) {
+            resPtr->addScale(
+                std::stoi(resLinePrms[2]), std::stof(resLinePrms[4]));
+          }
+          numProjections += numProjectionLayers;
+        } else {
+          resPtr->add(parseLine(resLine));
+        }
       }
 
+      numResLayerAndSkip = numResLayers + numSkipConnections + numProjections;
       return resPtr;
     };
 
-    auto numBlocks = params.size() % 2 == 1 ? std::stoi(params.back()) : 1;
+    auto numBlocks = params.size() == 4 ? std::stoi(params.back()) : 1;
     LOG_IF(FATAL, numBlocks <= 0)
         << "Invalid number of residual blocks: " << numBlocks;
 

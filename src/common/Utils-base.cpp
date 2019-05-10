@@ -302,17 +302,21 @@ std::vector<std::string> wrd2Target(
 
   std::vector<std::string> res;
   if (fallback2Ltr) {
-    for (auto& c : word) {
-      if (dict.contains(std::string(1, c))) {
-        res.push_back(std::string(1, c));
+    LOG(INFO)
+        << "Falling back to using letters as targets for the unknown word '"
+        << word << "'";
+    auto tokens = wrd2Tkn(word);
+    for (const auto& tkn : tokens) {
+      if (dict.contains(tkn)) {
+        res.push_back(tkn);
       } else if (skipUnk) {
         LOG(INFO)
-            << "Skipping unknown character '" << c
+            << "Skipping unknown token '" << tkn
             << "' when falling back to letter target for the unknown word '"
             << word << "'";
       } else {
         LOG(FATAL)
-            << "Unknown character '" << c
+            << "Unknown token '" << tkn
             << "' when falling back to letter target for the unknown word '"
             << word << "'";
       }
@@ -372,6 +376,11 @@ LexiconMap loadWords(const std::string& fn, const int64_t maxNumWords) {
 
   std::string line;
   std::ifstream infile(fn);
+
+  if (!infile) {
+    throw std::invalid_argument("Cannot open " + fn);
+  }
+
   while (std::getline(infile, line)) {
     // Parse the line into two strings: word and spelling.
     auto fields = splitOnWhitespace(line, true);
@@ -406,8 +415,9 @@ std::vector<int> tokens2Tensor(
     const Dictionary& tokenDict) {
   std::vector<int> ret;
   ret.reserve(spelling.size());
-  for (auto c : spelling) {
-    ret.push_back(tokenDict.getIndex(std::string(1, c)));
+  auto tokens = wrd2Tkn(spelling);
+  for (const auto& tkn : tokens) {
+    ret.push_back(tokenDict.getIndex(tkn));
   }
   replaceReplabels(ret, FLAGS_replabel, tokenDict);
   return ret;
@@ -497,6 +507,32 @@ std::vector<int> wrdTensor2tknTensor(
     }
   }
   return ret;
+}
+
+std::vector<std::string> wrd2Tkn(const std::string& word) {
+  std::vector<std::string> tokens;
+  tokens.reserve(word.size());
+  int len = word.length();
+  for (int i = 0; i < len;) {
+    auto c = static_cast<unsigned char>(word[i]);
+    int curTknBytes = -1;
+    // UTF-8 checks, works for ASCII automatically
+    if ((c & 0x80) == 0) {
+      curTknBytes = 1;
+    } else if ((c & 0xE0) == 0xC0) {
+      curTknBytes = 2;
+    } else if ((c & 0xF0) == 0xE0) {
+      curTknBytes = 3;
+    } else if ((c & 0xF8) == 0xF0) {
+      curTknBytes = 4;
+    }
+    if (curTknBytes == -1 || i + curTknBytes > len) {
+      throw std::runtime_error("wrd2Tkn: invalid UTF-8 : " + word);
+    }
+    tokens.emplace_back(word.begin() + i, word.begin() + i + curTknBytes);
+    i += curTknBytes;
+  }
+  return tokens;
 }
 
 } // namespace w2l

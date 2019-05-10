@@ -49,7 +49,6 @@ DEFINE_double(
     "probability [0.0, 1.0] for randomly sampling targets from a lexicon if there are multiple mappings from a word");
 
 // FILTERING OPTIONS
-DEFINE_bool(skipoov, false, "skip everstore samples if letter is oov");
 DEFINE_int64(minisz, 0, "min input size (in msec) allowed during training");
 DEFINE_int64(
     maxisz,
@@ -126,7 +125,7 @@ DEFINE_int64(
     0,
     "number of iterations after which we will run val and save model, \
     if 0 we only do this at end of epoch ");
-DEFINE_int64(
+DEFINE_double(
     pcttraineval,
     100,
     "percentage of training set (by number of utts) to use for evaluation");
@@ -140,7 +139,6 @@ DEFINE_int64(encoderdim, 0, "Dimension of encoded hidden state.");
 // DECODER OPTIONS
 DEFINE_bool(show, false, "show predictions");
 DEFINE_bool(showletters, false, "show letter predictions");
-DEFINE_bool(forceendsil, false, "force end sil");
 DEFINE_bool(logadd, false, "use logadd when merging decoder nodes");
 
 DEFINE_string(smearing, "none", "none, max or logadd");
@@ -194,6 +192,12 @@ DEFINE_double(
 DEFINE_bool(inputfeeding, false, "feed encoder summary to the decoder RNN");
 DEFINE_string(attention, "content", "attention type");
 DEFINE_string(attnWindow, "no", "attention window type");
+DEFINE_int64(attndim, 0, "Dimension of neural location attention");
+DEFINE_int64(
+    attnconvchannel,
+    0,
+    "Number of convolutional channels for location attention");
+DEFINE_int64(attnconvkernel, 0, "Kernel width for location attention");
 DEFINE_int64(leftWindowSize, 50, "left median window width");
 DEFINE_int64(rightWindowSize, 50, "right median window width");
 DEFINE_int64(
@@ -225,6 +229,10 @@ DEFINE_double(
     5,
     "std for the soft window shape (=exp(-(t - center)^2 / (2 * std^2)))");
 DEFINE_bool(trainWithWindow, false, "use window in training");
+DEFINE_int64(
+    pretrainWindow,
+    0,
+    "use window in training for pretrainWindow epochs");
 
 // DISTRIBUTED TRAINING
 DEFINE_bool(enable_distributed, false, "enable distributed training");
@@ -245,8 +253,4 @@ DEFINE_string(
 // FB SPECIFIC
 DEFINE_string(target, "tkn", "target feature");
 DEFINE_bool(everstoredb, false, "use Everstore db for reading data");
-DEFINE_string(
-    targettype,
-    "word",
-    "determines target parser type when using everstore db");
 } // namespace w2l

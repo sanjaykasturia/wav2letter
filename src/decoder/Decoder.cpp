@@ -26,23 +26,23 @@ void Decoder::candidatesReset() {
 
 void Decoder::candidatesAdd(
     const LMStatePtr& lmState,
-    const TrieNodePtr& lex,
+    const TrieNode* lex,
     const DecoderNode* parent,
     const float score,
-    const float beamScore,
-    const TrieLabelPtr& label,
+    const int letter,
+    const TrieLabel* label,
     const bool prevBlank) {
   if (score > candidatesBestScore_) {
     candidatesBestScore_ = score;
   }
 
-  if (score >= candidatesBestScore_ - beamScore) {
+  if (score >= candidatesBestScore_ - opt_.beamScore_) {
     if (nCandidates_ == candidates_.size()) {
       candidates_.resize(candidates_.size() + kBufferBucketSize);
     }
 
     candidates_[nCandidates_].updateAsConstructor(
-        lmState, lex, parent, score, label, prevBlank);
+        lmState, lex, parent, score, letter, label, prevBlank);
     ++nCandidates_;
   }
 }
@@ -61,27 +61,7 @@ void Decoder::mergeNodes(
   }
 }
 
-void Decoder::candidatesStore(
-    const DecoderOptions& opt,
-    std::vector<DecoderNode>& nextHyp,
-    const bool isSort) {
-  if (nCandidates_ == 0) {
-    return;
-  }
-  int nHypBeforeMerging = 0, nHypAfterMerging = 1;
-
-  /* Select valid candidates */
-  for (int i = 0; i < nCandidates_; i++) {
-    if (candidates_[i].score_ >= candidatesBestScore_ - opt.beamScore_) {
-      if (candidatePtrs_.size() == nHypBeforeMerging) {
-        candidatePtrs_.resize(candidatePtrs_.size() + kBufferBucketSize);
-      }
-      candidatePtrs_[nHypBeforeMerging] = &candidates_[i];
-      ++nHypBeforeMerging;
-    }
-  }
-
-  /* Sort by (LmState, lex, score) and copy into next hypothesis */
+int Decoder::mergeCandidates(const int size) {
   auto compareNodesShortList = [&](const DecoderNode* node1,
                                    const DecoderNode* node2) {
     int lmCmp = lm_->compareState(node1->lmState_, node2->lmState_);
@@ -97,11 +77,11 @@ void Decoder::candidatesStore(
   };
   std::sort(
       candidatePtrs_.begin(),
-      candidatePtrs_.begin() + nHypBeforeMerging,
+      candidatePtrs_.begin() + size,
       compareNodesShortList);
 
-  /* Merge decoder nodes with same (LmState, lex) */
-  for (int i = 1; i < nHypBeforeMerging; i++) {
+  int nHypAfterMerging = 1;
+  for (int i = 1; i < size; i++) {
     if (lm_->compareState(
             candidatePtrs_[i]->lmState_,
             candidatePtrs_[nHypAfterMerging - 1]->lmState_) ||
@@ -110,9 +90,36 @@ void Decoder::candidatesStore(
       nHypAfterMerging++;
     } else {
       mergeNodes(
-          candidatePtrs_[nHypAfterMerging - 1], candidatePtrs_[i], opt.logAdd_);
+          candidatePtrs_[nHypAfterMerging - 1],
+          candidatePtrs_[i],
+          opt_.logAdd_);
     }
   }
+
+  return nHypAfterMerging;
+}
+
+void Decoder::candidatesStore(
+    std::vector<DecoderNode>& nextHyp,
+    const bool isSort) {
+  if (nCandidates_ == 0) {
+    return;
+  }
+  int nValidHyp = 0;
+
+  /* Select valid candidates */
+  for (int i = 0; i < nCandidates_; i++) {
+    if (candidates_[i].score_ >= candidatesBestScore_ - opt_.beamScore_) {
+      if (candidatePtrs_.size() == nValidHyp) {
+        candidatePtrs_.resize(candidatePtrs_.size() + kBufferBucketSize);
+      }
+      candidatePtrs_[nValidHyp] = &candidates_[i];
+      ++nValidHyp;
+    }
+  }
+
+  /* Sort by (LmState, lex, score) and copy into next hypothesis */
+  nValidHyp = mergeCandidates(nValidHyp);
 
   /* Sort hypothesis and select top-K */
   auto compareNodesScore = [](const DecoderNode* node1,
@@ -120,32 +127,32 @@ void Decoder::candidatesStore(
     return node1->score_ > node2->score_;
   };
 
-  if (nHypAfterMerging <= opt.beamSize_) {
+  if (nValidHyp <= opt_.beamSize_) {
     if (isSort) {
       std::sort(
           candidatePtrs_.begin(),
-          candidatePtrs_.begin() + nHypAfterMerging,
+          candidatePtrs_.begin() + nValidHyp,
           compareNodesScore);
     }
-    nextHyp.resize(nHypAfterMerging);
-    for (int i = 0; i < nHypAfterMerging; i++) {
+    nextHyp.resize(nValidHyp);
+    for (int i = 0; i < nValidHyp; i++) {
       nextHyp[i] = std::move(*candidatePtrs_[i]);
     }
   } else {
     if (!isSort) {
       std::nth_element(
           candidatePtrs_.begin(),
-          candidatePtrs_.begin() + opt.beamSize_ - 1,
-          candidatePtrs_.begin() + nHypAfterMerging,
+          candidatePtrs_.begin() + opt_.beamSize_ - 1,
+          candidatePtrs_.begin() + nValidHyp,
           compareNodesScore);
     } else {
       std::sort(
           candidatePtrs_.begin(),
-          candidatePtrs_.begin() + nHypAfterMerging,
+          candidatePtrs_.begin() + nValidHyp,
           compareNodesScore);
     }
-    nextHyp.resize(opt.beamSize_);
-    for (int i = 0; i < opt.beamSize_; i++) {
+    nextHyp.resize(opt_.beamSize_);
+    for (int i = 0; i < opt_.beamSize_; i++) {
       nextHyp[i] = std::move(*candidatePtrs_[i]);
     }
   }
@@ -157,17 +164,12 @@ void Decoder::decodeBegin() {
 
   /* note: the lm reset itself with :start() */
   hyp_[0].emplace_back(
-      lm_->start(0), lexicon_->getRoot(), nullptr, 0.0, nullptr);
+      lm_->start(0), lexicon_->getRoot().get(), nullptr, 0.0, -1, nullptr);
   nDecodedFrames_ = 0;
   nPrunedFrames_ = 0;
 }
 
-void Decoder::decodeContinue(
-    const DecoderOptions& opt,
-    const float* transitions,
-    const float* emissions,
-    int T,
-    int N) {
+void Decoder::decodeContinue(const float* emissions, int T, int N) {
   int startFrame = nDecodedFrames_ - nPrunedFrames_;
   // Extend hyp_ buffer
   if (hyp_.size() < startFrame + T + 2) {
@@ -179,161 +181,138 @@ void Decoder::decodeContinue(
   for (int t = 0; t < T; t++) {
     candidatesReset();
     for (const DecoderNode& prevHyp : hyp_[startFrame + t]) {
-      const TrieNodePtr& prevLex = prevHyp.lex_;
+      const TrieNode* prevLex = prevHyp.lex_;
       const int prevIdx = prevLex->idx_;
       const float lexMaxScore =
-          prevLex == lexicon_->getRoot() ? 0 : prevLex->maxScore_;
+          prevLex == lexicon_->getRoot().get() ? 0 : prevLex->maxScore_;
       const LMStatePtr& prevLmState = prevHyp.lmState_;
 
-      for (int n = 0; n < N; n++) {
+      /* (1) Try children */
+      for (auto& child : prevLex->children_) {
+        int n = child.first;
+        const TrieNodePtr& lex = child.second;
         float score = prevHyp.score_ + emissions[t * N + n];
-        if (nDecodedFrames_ + t > 0 && opt.modelType_ == ModelType::ASG) {
-          score += transitions[n * N + prevIdx];
+        if (nDecodedFrames_ + t > 0 && opt_.modelType_ == ModelType::ASG) {
+          score += transitions_[n * N + prevIdx];
         }
-
-        /* emit a word only if silence */
         if (n == sil_) {
-          score = score + opt.silWeight_;
-          /* If we got a true word */
-          for (int i = 0; i < prevLex->nLabel_; i++) {
-            float lmScore;
-            const LMStatePtr newLmState =
-                lm_->score(prevLmState, prevLex->label_[i]->lm_, lmScore);
-            candidatesAdd(
-                newLmState,
-                lexicon_->getRoot(),
-                &prevHyp,
-                score + opt.lmWeight_ * (lmScore - lexMaxScore) +
-                    opt.wordScore_,
-                opt.beamScore_,
-                prevLex->label_[i],
-                false // prevBlank
-            );
-          }
-          /* If we got an unknown word */
-          if (prevLex->nLabel_ == 0 && (opt.unkScore_ > kNegativeInfinity)) {
-            float lmScore;
-            const LMStatePtr& newLmState =
-                lm_->score(prevLmState, unk_->lm_, lmScore);
-            candidatesAdd(
-                newLmState,
-                lexicon_->getRoot(),
-                &prevHyp,
-                score + opt.lmWeight_ * (lmScore - lexMaxScore) + opt.unkScore_,
-                opt.beamScore_,
-                unk_,
-                false // prevBlank
-            );
-          }
-          /* Allow starting with a sil */
-          if (nDecodedFrames_ + t == 0) {
+          score += opt_.silWeight_;
+        }
+
+        // We eat-up a new token
+        if (opt_.modelType_ != ModelType::CTC || prevHyp.prevBlank_ ||
+            n != prevIdx) {
+          if (!lex->children_.empty()) {
             candidatesAdd(
                 prevLmState,
-                prevLex,
+                lex.get(),
                 &prevHyp,
-                score,
-                opt.beamScore_,
+                score + opt_.lmWeight_ * (lex->maxScore_ - lexMaxScore),
+                n,
                 nullptr,
                 false // prevBlank
             );
           }
         }
 
-        /* same place in lexicon (or sil) */
-        if ((n == prevIdx && nDecodedFrames_ + t > 0) && !prevHyp.prevBlank_) {
+        // If we got a true word
+        for (int i = 0; i < lex->nLabel_; i++) {
+          float lmScore;
+          const LMStatePtr newLmState =
+              lm_->score(prevLmState, lex->label_[i]->lm_, lmScore);
           candidatesAdd(
-              prevLmState,
-              prevLex,
+              newLmState,
+              lexicon_->getRoot().get(),
               &prevHyp,
-              score,
-              opt.beamScore_,
-              nullptr,
-              prevHyp.prevBlank_ // prevBlank
+              score + opt_.lmWeight_ * (lmScore - lexMaxScore) +
+                  opt_.wordScore_,
+              n,
+              lex->label_[i].get(),
+              false // prevBlank
           );
-        } else if (opt.modelType_ == ModelType::CTC && n == blank_) {
+        }
+
+        // If we got an unknown word
+        if (lex->nLabel_ == 0 && (opt_.unkScore_ > kNegativeInfinity)) {
+          float lmScore;
+          const LMStatePtr newLmState =
+              lm_->score(prevLmState, unk_->lm_, lmScore);
           candidatesAdd(
-              prevLmState,
-              prevLex,
+              newLmState,
+              lexicon_->getRoot().get(),
               &prevHyp,
-              score,
-              opt.beamScore_,
-              nullptr,
-              true // prevBlank
+              score + opt_.lmWeight_ * (lmScore - lexMaxScore) + opt_.unkScore_,
+              n,
+              unk_.get(),
+              false // prevBlank
           );
-        } else if (
-            n != sil_ ||
-            (opt.modelType_ == ModelType::CTC && n == prevIdx &&
-             prevHyp.prevBlank_)) {
-          /* we eat-up a new token */
-          const TrieNodePtr& lex = prevLex->children_[n];
-          if (lex) {
-            candidatesAdd(
-                prevLmState,
-                lex,
-                &prevHyp,
-                score + opt.lmWeight_ * (lex->maxScore_ - lexMaxScore),
-                opt.beamScore_,
-                nullptr,
-                false // prevBlank
-            );
-          }
         }
       }
+
+      /* (2) Try same lexicon node */
+      if (opt_.modelType_ != ModelType::CTC || !prevHyp.prevBlank_) {
+        int n = prevIdx;
+        float score = prevHyp.score_ + emissions[t * N + n];
+        if (nDecodedFrames_ + t > 0 && opt_.modelType_ == ModelType::ASG) {
+          score += transitions_[n * N + prevIdx];
+        }
+        if (n == sil_) {
+          score += opt_.silWeight_;
+        }
+
+        candidatesAdd(
+            prevLmState,
+            prevLex,
+            &prevHyp,
+            score,
+            n,
+            nullptr,
+            false // prevBlank
+        );
+      }
+
+      /* (3) CTC only, try blank */
+      if (opt_.modelType_ == ModelType::CTC) {
+        int n = blank_;
+        float score = prevHyp.score_ + emissions[t * N + n];
+        candidatesAdd(
+            prevLmState,
+            prevLex,
+            &prevHyp,
+            score,
+            n,
+            nullptr,
+            true // prevBlank
+        );
+      }
+      // finish proposing
     }
-    candidatesStore(opt, hyp_[startFrame + t + 1], false);
+
+    candidatesStore(hyp_[startFrame + t + 1], false);
   }
   nDecodedFrames_ += T;
 }
 
-void Decoder::decodeEnd(const DecoderOptions& opt) {
+void Decoder::decodeEnd() {
   candidatesReset();
   for (const DecoderNode& prevHyp : hyp_[nDecodedFrames_ - nPrunedFrames_]) {
-    const TrieNodePtr prevLex = prevHyp.lex_;
-    const int prevIdx = prevLex->idx_;
-    const float lexMaxScore =
-        prevLex == lexicon_->getRoot() ? 0 : prevLex->maxScore_;
-    const LMStatePtr prevLmState = prevHyp.lmState_;
+    const TrieNode* prevLex = prevHyp.lex_;
+    const LMStatePtr& prevLmState = prevHyp.lmState_;
 
-    // emit a word only if silence (... or here for end of sentence!!)
-    // one could ignore this and force to finish in a sil (if sil is provided)
-    for (int i = 0; i < prevLex->nLabel_; i++) { /* true word? */
-      float lmScore;
-      float lmScoreEnd;
-      LMStatePtr newLmState =
-          lm_->score(prevLmState, prevLex->label_[i]->lm_, lmScore);
-      newLmState = lm_->finish(newLmState, lmScoreEnd);
-
-      candidatesAdd(
-          newLmState,
-          lexicon_->getRoot(),
-          &prevHyp,
-          prevHyp.score_ +
-              opt.lmWeight_ * (lmScore + lmScoreEnd - lexMaxScore) +
-              opt.wordScore_,
-          opt.beamScore_,
-          prevLex->label_[i],
-          false // prevBlank
-      );
-    }
-
-    /* we can also end in a sil */
-    /* not enforcing that, we would end up in middle of a word */
-    if ((!opt.forceEndSil_) || (prevIdx == sil_)) {
-      float lmScoreEnd;
-      LMStatePtr newLmState = lm_->finish(prevLmState, lmScoreEnd);
-
-      candidatesAdd(
-          newLmState,
-          prevLex,
-          &prevHyp,
-          prevHyp.score_ + opt.lmWeight_ * lmScoreEnd,
-          opt.beamScore_,
-          nullptr,
-          false // prevBlank
-      );
-    }
+    float lmScoreEnd;
+    LMStatePtr newLmState = lm_->finish(prevLmState, lmScoreEnd);
+    candidatesAdd(
+        newLmState,
+        prevLex,
+        &prevHyp,
+        prevHyp.score_ + opt_.lmWeight_ * lmScoreEnd,
+        -1,
+        nullptr,
+        false // prevBlank
+    );
   }
-  candidatesStore(opt, hyp_[nDecodedFrames_ - nPrunedFrames_ + 1], true);
+
+  candidatesStore(hyp_[nDecodedFrames_ - nPrunedFrames_ + 1], true);
   ++nDecodedFrames_;
 }
 
@@ -341,15 +320,10 @@ std::tuple<
     std::vector<float>,
     std::vector<std::vector<int>>,
     std::vector<std::vector<int>>>
-Decoder::decode(
-    const DecoderOptions& opt,
-    const float* transitions,
-    const float* emissions,
-    int T,
-    int N) {
+Decoder::decode(const float* emissions, int T, int N) {
   decodeBegin();
-  decodeContinue(opt, transitions, emissions, T, N);
-  decodeEnd(opt);
+  decodeContinue(emissions, T, N);
+  decodeEnd();
   return storeAllFinalHypothesis();
 }
 
@@ -375,7 +349,7 @@ Decoder::storeAllFinalHypothesis() const {
     while (node) {
       wordPredictions[r][finalFrame - i] =
           (node->label_ ? node->label_->usr_ : -1);
-      letterPredictions[r][finalFrame - i] = node->lex_->idx_;
+      letterPredictions[r][finalFrame - i] = node->letter_;
       node = node->parent_;
       i++;
     }
@@ -497,8 +471,9 @@ void Decoder::prune(int lookBack) {
 
   nPrunedFrames_ = nDecodedFrames_ - lookBack;
 
-  // (3) For the last frame hyp_[lookBack], subtract the largest score for each
-  // hypothesis in it so as to avoid underflow/overflow.
+  // (3) For the last frame hyp_[lookBack], subtract the largest
+  // score for each hypothesis in it so as to avoid
+  // underflow/overflow.
   float largestScore = hyp_[lookBack].front().score_;
   for (int i = 1; i < hyp_[lookBack].size(); i++) {
     if (largestScore < hyp_[lookBack][i].score_) {

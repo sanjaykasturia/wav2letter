@@ -24,12 +24,15 @@ class W2lListFilesDataset : public W2lDataset {
       int worldRank = 0,
       int worldSize = 1,
       bool fallback2Ltr = false,
-      bool skipUnk = false);
+      bool skipUnk = false,
+      const std::string& rootdir = "");
 
   ~W2lListFilesDataset() override;
 
   virtual std::vector<W2lLoaderData> getLoaderData(
       const int64_t idx) const override;
+
+  virtual std::vector<float> loadSound(const std::string& audioHandle) const;
 
  private:
   std::vector<int64_t> sampleSizeOrder_;

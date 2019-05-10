@@ -19,10 +19,13 @@ namespace w2l {
 constexpr size_t kInputIdx = 0;
 constexpr size_t kTargetIdx = 1;
 constexpr size_t kWordIdx = 2;
-constexpr size_t kFileIdIdx = 3;
+constexpr size_t kSampleIdx = 3;
 constexpr size_t kNumDataIdx = 4; // total number of dataset indices
 
 // Various constants used in w2l
+constexpr const char* kTrainMode = "train";
+constexpr const char* kContinueMode = "continue";
+constexpr const char* kForkMode = "fork";
 constexpr const char* kGflags = "gflags";
 constexpr const char* kCommandLine = "commandline";
 constexpr const char* kUserName = "username";
@@ -76,7 +79,6 @@ DECLARE_double(sampletarget);
 
 /* ========== FILTERING OPTIONS ========== */
 
-DECLARE_bool(skipoov);
 DECLARE_int64(minisz);
 DECLARE_int64(maxisz);
 DECLARE_int64(mintsz);
@@ -137,7 +139,7 @@ DECLARE_string(tag);
 DECLARE_int64(seed);
 DECLARE_int64(memstepsize);
 DECLARE_int64(reportiters);
-DECLARE_int64(pcttraineval);
+DECLARE_double(pcttraineval);
 
 /* ========== ARCHITECTURE OPTIONS ========== */
 
@@ -150,7 +152,6 @@ DECLARE_int64(encoderdim);
 
 DECLARE_bool(show);
 DECLARE_bool(showletters);
-DECLARE_bool(forceendsil);
 DECLARE_bool(logadd);
 
 DECLARE_string(smearing);
@@ -188,6 +189,9 @@ DECLARE_double(labelsmooth);
 DECLARE_bool(inputfeeding);
 DECLARE_string(attention);
 DECLARE_string(attnWindow);
+DECLARE_int64(attndim);
+DECLARE_int64(attnconvchannel);
+DECLARE_int64(attnconvkernel);
 DECLARE_int64(leftWindowSize);
 DECLARE_int64(rightWindowSize);
 DECLARE_int64(maxsil);
@@ -198,6 +202,7 @@ DECLARE_int64(softwoffset);
 DECLARE_double(softwrate);
 DECLARE_double(softwstd);
 DECLARE_bool(trainWithWindow);
+DECLARE_int64(pretrainWindow);
 
 /* ========== DISTRIBUTED TRAINING ========== */
 DECLARE_bool(enable_distributed);
@@ -208,6 +213,5 @@ DECLARE_string(rndv_filepath);
 /* ========== FB SPECIFIC ========== */
 DECLARE_string(target);
 DECLARE_bool(everstoredb);
-DECLARE_string(targettype);
 
 } // namespace w2l
